@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum Wave Function Music Generator</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050510;
+            color: #a0a0ff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        canvas {
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
+            background: #000;
+            cursor: crosshair;
+        }
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border: 1px solid #444;
+            border-radius: 8px;
+        }
+        button {
+            background: #2a2a50;
+            color: #fff;
+            border: 1px solid #55f;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover {
+            background: #44f;
+            box-shadow: 0 0 10px #44f;
+        }
+        .info {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #888;
+        }
+        #status {
+            margin-top: 10px;
+            color: #0f0;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <h2>Quantum Melody Generator</h2>
+        <p>Uses Time-Dependent Schrödinger Equation (TDSE) superposition to drive a probabilistic sequencer.</p>
+        <button id="startBtn">Sistemi Başlat (Start System)</button>
+        <div id="status">Durum: Bekliyor...</div>
+        <div class="info">
+            Blue Line: Real part of &Psi;<br>
+            Red Line: Imaginary part of &Psi;<br>
+            White Glow: Probability Density |&Psi;|²<br>
+            Vertical Bars: Musical Notes (Probability zones)
+        </div>
+    </div>
+
+    <canvas id="quantumCanvas"></canvas>
+
+    <script>
+        // --- Configuration ---
+        const CONFIG = {
+            noteThreshold: 0.15, // Threshold of probability to trigger a note
+            decayRate: 0.95,     // Visual decay
+            speed: 0.005,        // Simulation speed (Reduced for stability)
+            baseFreq: 196.00,    // G3
+            scale: [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24], // G Minor Pentatonic extended
+            eigenstates: 5       // Number of quantum states to superimpose
+        };
+
+        // --- Audio Context & Engine ---
+        let audioCtx;
+        let masterGain;
+        let reverbNode;
+        let compressor;
+        let isPlaying = false;
+
+        async function initAudio() {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+            
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.3; // Reduced gain to prevent clipping
+            
+            // Compressor to handle dynamic range and prevent digital clipping (crackle)
+            compressor = audioCtx.createDynamicsCompressor();
+            compressor.threshold.setValueAtTime(-20, audioCtx.currentTime);
+            compressor.knee.setValueAtTime(30, audioCtx.currentTime);
+            compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
+            compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+            compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+
+            // Create Convolver for Reverb (Synthetic Impulse)
+            const reverb = audioCtx.createConvolver();
+            reverb.buffer = createImpulseResponse(2.5, 2.0); // 2.5s duration, decay
+            reverbNode = reverb;
+
+            // Chain: Source -> Reverb -> Master -> Compressor -> Out
+            reverb.connect(masterGain);
+            masterGain.connect(compressor);
+            compressor.connect(audioCtx.destination);
+        }
+
+        // Create a synthetic reverb impulse
+        function createImpulseResponse(duration, decay) {
+            const rate = audioCtx.sampleRate;
+            const length = rate * duration;
+            const impulse = audioCtx.createBuffer(2, length, rate);
+            const left = impulse.getChannelData(0);
+            const right = impulse.getChannelData(1);
+
+            for (let i = 0; i < length; i++) {
+                const n = length - i;
+                // Randomized exponential decay
+                left[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+                right[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+            }
+            return impulse;
+        }
+
+        function playNote(freq, velocity) {
+            if (!audioCtx) return;
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const filter = audioCtx.createBiquadFilter();
+
+            const now = audioCtx.currentTime;
+
+            // Sound design
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now);
+
+            // Filter envelope for "plucky" but soft sound
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(200, now);
+            filter.frequency.exponentialRampToValueAtTime(3000, now + 0.1);
+            filter.frequency.exponentialRampToValueAtTime(500, now + 1.5);
+
+            // Amplitude envelope
+            // Prevent clicking by ensuring start and end are strictly 0
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(velocity * 0.4, now + 0.05); // Attack
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 3.0); // Release
+            gain.gain.linearRampToValueAtTime(0, now + 3.1); // Ensure zero before stop
+
+            // Connect graph
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(masterGain);
+            gain.connect(reverbNode); // Send to reverb too
+
+            osc.start(now);
+            osc.stop(now + 3.2); // Stop slightly after volume hits 0
+        }
+
+        // --- Quantum Simulation (1D Particle in a Box) ---
+        // Psi(x,t) = Sum( c_n * psi_n(x) * exp(-i * E_n * t) )
+        // psi_n(x) = sqrt(2/L) * sin(n * pi * x / L)
+        // E_n is proportional to n^2
+
+        class QuantumSystem {
+            constructor(width) {
+                this.L = width;
+                this.states = [];
+                this.time = 0;
+                this.initializeStates();
+            }
+
+            initializeStates() {
+                this.states = [];
+                // Create a random superposition of eigenstates
+                for (let n = 1; n <= CONFIG.eigenstates; n++) {
+                    this.states.push({
+                        n: n, // Quantum number
+                        amplitude: Math.random(), // c_n magnitude
+                        phase: Math.random() * Math.PI * 2, // c_n phase
+                        energy: n * n // E is proportional to n^2
+                    });
+                }
+                // Normalize coefficients is handled implicitly by drawing scale, strictly logic doesn't need unitary norm for visualization/music
+            }
+
+            // Calculate Probability Density |Psi(x,t)|^2 at position x
+            getProbability(x) {
+                // x is 0 to L
+                // We sum the complex wavefunctions
+                let realSum = 0;
+                let imagSum = 0;
+
+                const normX = x / this.L; // 0.0 to 1.0
+
+                for (let state of this.states) {
+                    // psi_n(x) component
+                    const spatial = Math.sin(state.n * Math.PI * normX);
+                    
+                    // Time evolution: exp(-i * E * t) = cos(Et) - i*sin(Et)
+                    const theta = state.energy * this.time + state.phase;
+                    
+                    // Combine coefficient * spatial * temporal
+                    // (A * spatial) * (cos(theta) - i*sin(theta))
+                    const val = state.amplitude * spatial;
+                    
+                    realSum += val * Math.cos(theta);
+                    imagSum -= val * Math.sin(theta);
+                }
+
+                // |Psi|^2 = Real^2 + Imag^2
+                return {
+                    prob: realSum * realSum + imagSum * imagSum,
+                    real: realSum,
+                    imag: imagSum
+                };
+            }
+
+            update() {
+                this.time += CONFIG.speed;
+            }
+        }
+
+        // --- Visualization & Loop ---
+        const canvas = document.getElementById('quantumCanvas');
+        const ctx = canvas.getContext('2d');
+        let system;
+        let cooldowns = []; // Prevent notes from firing every frame
+        let zoneVisuals = []; // Store brightness of each zone for smooth fading
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if (system) system.L = canvas.width;
+            
+            // Reset cooldowns based on screen width slices
+            const numNotes = CONFIG.scale.length;
+            cooldowns = new Array(numNotes).fill(0);
+            zoneVisuals = new Array(numNotes).fill(0);
+        }
+
+        window.addEventListener('resize', resize);
+
+        function draw() {
+            if (!isPlaying) return;
+
+            // Fade effect (slightly stronger trails for stability)
+            ctx.fillStyle = 'rgba(5, 5, 16, 0.15)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            system.update();
+
+            const numNotes = CONFIG.scale.length;
+            const sliceWidth = canvas.width / numNotes;
+
+            // Update Visuals (Smooth Fade Out)
+            for(let i=0; i<numNotes; i++) {
+                zoneVisuals[i] *= 0.96; // Smooth decay factor
+            }
+
+            // 1. Draw Note Zones (Background with variable brightness)
+            for (let i = 0; i < numNotes; i++) {
+                const x = i * sliceWidth;
+                const brightness = zoneVisuals[i];
+                
+                // Draw triggers
+                if (brightness > 0.01) {
+                    ctx.fillStyle = `rgba(100, 255, 255, ${brightness * 0.3})`;
+                    ctx.fillRect(x, 0, sliceWidth, canvas.height);
+                }
+                
+                // Static grid
+                ctx.strokeStyle = `rgba(50, 50, 100, 0.2)`;
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+
+            // 2. Calculate Wave & Trigger Notes
+            ctx.beginPath();
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 10; // Glow effect
+            ctx.shadowColor = "#00ffff";
+
+            let prevY = canvas.height / 2;
+
+            // We scan across the screen pixel by pixel
+            // Also accumulate probability per "note zone"
+            let zoneProbs = new Array(numNotes).fill(0);
+
+            for (let x = 0; x < canvas.width; x += 5) {
+                const data = system.getProbability(x);
+                
+                // Visualization: Center y
+                const y = (canvas.height / 2) - (data.real * 150); 
+                
+                if (x === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+
+                // Map x to note zone
+                const noteIndex = Math.floor(x / sliceWidth);
+                if (noteIndex < numNotes) {
+                    // Accumulate peak probability for this zone
+                    if (data.prob > zoneProbs[noteIndex]) {
+                        zoneProbs[noteIndex] = data.prob;
+                    }
+                }
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0; // Reset shadow for next drawing
+
+            // Draw |Psi|^2 (Probability Density) as a glow
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = "white";
+
+            for (let x = 0; x < canvas.width; x += 5) {
+                const data = system.getProbability(x);
+                const probHeight = data.prob * 300;
+                const y = (canvas.height / 2) + 100 - probHeight;
+                if (x===0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            // 3. Logic: Check Triggers
+            const now = Date.now();
+            for (let i = 0; i < numNotes; i++) {
+                // If probability in this zone is high enough AND cooldown is over
+                if (zoneProbs[i] > CONFIG.noteThreshold && now > cooldowns[i]) {
+                    
+                    // Trigger Note!
+                    const interval = CONFIG.scale[i];
+                    const freq = CONFIG.baseFreq * Math.pow(2, interval / 12);
+                    
+                    // Velocity depends on probability
+                    playNote(freq, Math.min(zoneProbs[i], 1.0));
+
+                    // Boost Visual Brightness for this zone (Smoothly)
+                    zoneVisuals[i] = Math.min(zoneVisuals[i] + 0.8, 1.0);
+
+                    // Set Cooldown (randomized to create rhythmic variation)
+                    cooldowns[i] = now + 200 + Math.random() * 800;
+                }
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        // --- Interaction ---
+        const btn = document.getElementById('startBtn');
+        const statusDiv = document.getElementById('status');
+
+        btn.addEventListener('click', () => {
+            if (!isPlaying) {
+                initAudio().then(() => {
+                    system = new QuantumSystem(window.innerWidth);
+                    resize();
+                    isPlaying = true;
+                    btn.textContent = "Sistemi Durdur (Stop)";
+                    statusDiv.textContent = "Durum: Dalga Fonksiyonu Simüle Ediliyor...";
+                    draw();
+                });
+            } else {
+                isPlaying = false;
+                btn.textContent = "Sistemi Başlat (Start)";
+                statusDiv.textContent = "Durum: Durduruldu.";
+                if(audioCtx) audioCtx.suspend();
+            }
+        });
+
+        // Click on canvas to disturb the wave (Quantum Measurement/Collapse simulation)
+        canvas.addEventListener('mousedown', () => {
+            if(system) {
+                system.initializeStates(); // Randomize wavefunction
+                playNote(CONFIG.baseFreq / 2, 0.5); // Low bass thump
+                // Flash effect
+                ctx.fillStyle = "white";
+                ctx.fillRect(0,0,canvas.width, canvas.height);
+            }
+        });
+
+    </script>
+</body>
+</html>
